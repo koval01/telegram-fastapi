@@ -31,20 +31,21 @@ def append_to_file_if_not_exists(key: str, value: str, file_path: str = ".env.lo
                         print("You refused to overwrite")
                         return
     except FileNotFoundError:
-        print("file not found")
+        print("File not found")
 
     # Append the key-value pair to the file
     with open(file_path, 'w') as file:
         file.write(f'{example_env}{key}="{value}"\n')
+        print("Done!")
 
 
 async def main():
-    async with client:
-        session_key = await client.export_session_string()
-        if not session_key:
-            raise Exception("session_key export error")
-        append_to_file_if_not_exists('SESSION', session_key)
-        exit("done")
+    await client.start()
+    session_key = await client.export_session_string()
+    if not session_key:
+        raise Exception("session_key export error")
+    append_to_file_if_not_exists('SESSION', session_key)
+    await client.stop()
 
 
 asyncio.run(main())

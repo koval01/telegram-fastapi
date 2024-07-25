@@ -7,6 +7,7 @@ This API provides a simple interface to interact with Telegram.
 import logging
 import os
 import json
+from contextlib import asynccontextmanager
 from time import time
 from datetime import datetime
 from enum import Enum
@@ -43,6 +44,17 @@ client = Client(
 
 # Initialize the FastAPI app
 app = FastAPI()
+main_app_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def lifespan_wrapper(_: FastAPI):
+    await client.start()
+    async with main_app_lifespan(app) as maybe_state:
+        yield maybe_state
+    await client.stop()
+
+app.router.lifespan_context = lifespan_wrapper
 
 
 class Cryptography:
@@ -251,16 +263,15 @@ async def get_channel(username: str) -> JSONResponse:
     Raises:
         HTTPException: If the channel does not exist or is not a channel.
     """
-    async with client:
-        try:
-            resp = await client.get_chat(username)
-        except UsernameNotOccupied:
-            raise HTTPException(status_code=404, detail="This username does not exist")
-        if resp.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
-            raise HTTPException(status_code=403, detail="This is not channel or group")
-        return JSONResponse(
-            PyrogramResponse.build(resp)
-        )
+    try:
+        resp = await client.get_chat(username)
+    except UsernameNotOccupied:
+        raise HTTPException(status_code=404, detail="This username does not exist")
+    if resp.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
+        raise HTTPException(status_code=403, detail="This is not channel or group")
+    return JSONResponse(
+        PyrogramResponse.build(resp)
+    )
 
 
 @app.get("/messages/{username}")
@@ -286,20 +297,19 @@ async def get_messages(
         HTTPException: If the channel does not exist or is not a channel.
     """
     messages = []
-    async with client:
-        try:
-            resp = client.get_chat_history(
-                username, limit=20, offset=offset, offset_id=offset_id, offset_date=offset_date)
-        except UsernameNotOccupied:
-            raise HTTPException(status_code=404, detail="This username does not exist")
-        async for i, message in a.enumerate(resp):
-            if not i and message.chat.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
-                raise HTTPException(status_code=403, detail="This is not channel or group")
-            del message.chat
-            messages.append(
-                PyrogramResponse.build(message)
-            )
-        return JSONResponse(messages)
+    try:
+        resp = client.get_chat_history(
+            username, limit=20, offset=offset, offset_id=offset_id, offset_date=offset_date)
+    except UsernameNotOccupied:
+        raise HTTPException(status_code=404, detail="This username does not exist")
+    async for i, message in a.enumerate(resp):
+        if not i and message.chat.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
+            raise HTTPException(status_code=403, detail="This is not channel or group")
+        del message.chat
+        messages.append(
+            PyrogramResponse.build(message)
+        )
+    return JSONResponse(messages)
 
 
 @app.get(
@@ -332,12 +342,11 @@ async def get_media(media: str) -> Response:
     if data["timestamp"] < int(time()):
         raise HTTPException(status_code=400, detail="Invalid media token")
 
-    async with client:
-        file = await client.download_media(data["file_id"], in_memory=True)
-        if not file:
-            raise HTTPException(status_code=404, detail="File not found")
-        image_bytes = bytes(file.getbuffer())
-        return Response(content=image_bytes, media_type=data.get("mime_type", "image/png"))
+    file = await client.download_media(data["file_id"], in_memory=True)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    image_bytes = bytes(file.getbuffer())
+    return Response(content=image_bytes, media_type=data.get("mime_type", "image/png"))
 
 
 @app.get(
@@ -356,11 +365,10 @@ async def get_health() -> Response:
     Raises:
         HTTPException: If the API is not healthy.
     """
-    async with client:
-        try:
-            await client.get_me()
-        except Exception as e:
-            logging.error(str(e))
-            raise HTTPException(status_code=500)
+    try:
+        await client.get_me()
+    except Exception as e:
+        logging.error(str(e))
+        raise HTTPException(status_code=500)
 
-        return Response(None, status_code=200)
+    return Response(None, status_code=200)
