@@ -1,0 +1,8 @@
+fastapi==0.111.1
+pyrogram==2.0.106
+tgcrypto==1.2.5
+starlette~=0.37.2
+jsonpickle~=3.2.2
+asyncstdlib~=3.12.4
+python-dotenv~=1.0.1
+cryptography~=43.0.0
