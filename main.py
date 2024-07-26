@@ -16,12 +16,14 @@ from typing import Union
 import asyncstdlib as a
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse, JSONResponse, Response
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse, Response
 
 from pyrogram import Client, utils
-from pyrogram.errors.exceptions import UsernameNotOccupied
 from pyrogram.enums import ChatType
 from pyrogram.types import Object
+
+from pyrogram.errors.exceptions import UsernameNotOccupied
+from pyrogram.errors.exceptions.not_acceptable_406 import ChannelPrivate
 
 from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
@@ -29,6 +31,9 @@ from cryptography.fernet import InvalidToken
 from dotenv import load_dotenv
 
 import jsonpickle
+
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv(".env.local")
@@ -271,6 +276,8 @@ async def get_channel(username: str) -> JSONResponse:
         resp = await client.get_chat(username)
     except UsernameNotOccupied:
         raise HTTPException(status_code=404, detail="This username does not exist")
+    except ChannelPrivate as e:
+        raise HTTPException(status_code=403, detail=str(e))
     if resp.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
         raise HTTPException(status_code=403, detail="This is not channel or group")
     return JSONResponse(
@@ -306,6 +313,8 @@ async def get_messages(
             username, limit=20, offset=offset, offset_id=offset_id, offset_date=offset_date)
     except UsernameNotOccupied:
         raise HTTPException(status_code=404, detail="This username does not exist")
+    except ChannelPrivate as e:
+        raise HTTPException(status_code=403, detail=str(e))
     async for i, message in a.enumerate(resp):
         if not i and message.chat.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
             raise HTTPException(status_code=403, detail="This is not channel or group")
@@ -344,11 +353,9 @@ async def get_media(media: str) -> Response:
     except InvalidToken:
         raise HTTPException(status_code=400, detail="Invalid media token")
 
-    file = await client.download_media(data["file_id"], in_memory=True)
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
-    image_bytes = bytes(file.getbuffer())
-    return Response(content=image_bytes, media_type=data.get("mime_type", "image/png"))
+    return StreamingResponse(
+        client.stream_media(data["file_id"]),
+        media_type=data.get("mime_type", "image/png"))
 
 
 @app.get(
@@ -367,10 +374,5 @@ async def get_health() -> Response:
     Raises:
         HTTPException: If the API is not healthy.
     """
-    try:
-        await client.get_me()
-    except Exception as e:
-        logging.error(str(e))
-        raise HTTPException(status_code=500)
-
+    await client.get_me()
     return Response(None, status_code=200)
