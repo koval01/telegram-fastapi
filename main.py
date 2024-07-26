@@ -258,19 +258,19 @@ def read_root() -> RedirectResponse:
     return RedirectResponse("/docs")
 
 
-@app.get("/channel/{username}")
-async def get_channel(username: str) -> JSONResponse:
+@app.get("/chat/{username}")
+async def get_chat(username: str) -> JSONResponse:
     """
-    Retrieves information about a Telegram channel.
+    Retrieves information about a Telegram chat.
 
     Args:
-        username: The username of the channel.
+        username: The username of the chat.
 
     Returns:
-        A JSON response containing the channel information.
+        A JSON response containing the chat information.
 
     Raises:
-        HTTPException: If the channel does not exist or is not a channel.
+        HTTPException: If the chat does not exist or is not a channel or group.
     """
     try:
         resp = await client.get_chat(username)
