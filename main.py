@@ -44,7 +44,8 @@ client = Client(
     os.getenv("API_ID"),
     os.getenv("API_HASH"),
     in_memory=True,
-    session_string=os.getenv("SESSION")
+    session_string=os.getenv("SESSION"),
+    device_model=os.uname()[1]
 )
 
 # Initialize the FastAPI app
