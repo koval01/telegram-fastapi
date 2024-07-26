@@ -15,15 +15,14 @@ from typing import Union
 
 import asyncstdlib as a
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse, Response
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from pyrogram import Client, utils
 from pyrogram.enums import ChatType
 from pyrogram.types import Object
-
-from pyrogram.errors.exceptions import UsernameNotOccupied
-from pyrogram.errors.exceptions.not_acceptable_406 import ChannelPrivate
+from pyrogram.errors.exceptions import UsernameNotOccupied, ChannelPrivate
 
 from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
@@ -49,7 +48,10 @@ client = Client(
 )
 
 # Initialize the FastAPI app
-app = FastAPI()
+app = FastAPI(debug=False)
+app.add_middleware(
+    TrustedHostMiddleware, allowed_hosts=os.getenv("ALLOWED_HOSTS").split(",")
+)
 main_app_lifespan = app.router.lifespan_context
 
 
@@ -137,9 +139,10 @@ class PyrogramResponse:
     """
     Provides utilities for processing Pyrogram responses.
     """
+    def __init__(self, host: str) -> None:
+        self.host = "http://localhost:8000" if host == "localhost" else f"https://{host}"
 
-    @staticmethod
-    def file_id_(file_id: str, mime_type: str = "") -> str:
+    def file_id_(self, file_id: str, mime_type: str = "") -> str:
         """
         Generates a file URL from the given file ID and mime type.
 
@@ -154,10 +157,9 @@ class PyrogramResponse:
         if mime_type:
             data["mime_type"] = mime_type
         data = Cryptography().encrypt_json(data)
-        return f"{os.getenv('APP_DOMAIN')}/media/{data}"
+        return f"{self.host}/media/{data}"
 
-    @classmethod
-    def process_file_ids(cls, data: Union[dict, list]) -> Union[dict, list]:
+    def process_file_ids(self, data: Union[dict, list]) -> Union[dict, list]:
         """
         Recursively processes file IDs in the given data.
 
@@ -178,9 +180,9 @@ class PyrogramResponse:
                     mime = _dict.get(mime_key, "")
 
                     if mime:
-                        new_dict[new_key] = cls.file_id_(value, mime)
+                        new_dict[new_key] = self.file_id_(value, mime)
                     else:
-                        new_dict[new_key] = cls.file_id_(value)
+                        new_dict[new_key] = self.file_id_(value)
                 new_dict[key] = value
                 if isinstance(value, dict):
                     new_dict[key] = process_dict(value)
@@ -205,8 +207,7 @@ class PyrogramResponse:
         elif isinstance(data, list):
             return process_list(data)
 
-    @classmethod
-    def replace_enum_types_with_names(cls, obj: "Object") -> Union[Object, list]:
+    def replace_enum_types_with_names(self, obj: "Object") -> Union[Object, list]:
         """
         Recursively replaces Enum types with their string names in a Pyrogram object.
 
@@ -223,15 +224,14 @@ class PyrogramResponse:
                     if isinstance(attr_value, Enum):
                         setattr(obj, attr, attr_value.name.title())
                     else:
-                        setattr(obj, attr, cls.replace_enum_types_with_names(attr_value))
+                        setattr(obj, attr, self.replace_enum_types_with_names(attr_value))
             return obj
         elif isinstance(obj, list):
-            return [cls.replace_enum_types_with_names(item) for item in obj]
+            return [self.replace_enum_types_with_names(item) for item in obj]
         else:
             return obj
 
-    @classmethod
-    def build(cls, _input: Object) -> Union[dict, list]:
+    def build(self, _input: Object) -> Union[dict, list]:
         """
         Processes the Pyrogram object and returns a JSON-compatible representation.
 
@@ -241,9 +241,9 @@ class PyrogramResponse:
         Returns:
             The JSON-compatible representation of the object.
         """
-        return cls.process_file_ids(
+        return self.process_file_ids(
             jsonpickle.decode(
-                str(cls.replace_enum_types_with_names(_input))
+                str(self.replace_enum_types_with_names(_input))
             )
         )
 
@@ -260,11 +260,12 @@ def read_root() -> RedirectResponse:
 
 
 @app.get("/chat/{username}")
-async def get_chat(username: str) -> JSONResponse:
+async def get_chat(request: Request, username: str) -> JSONResponse:
     """
     Retrieves information about a Telegram chat.
 
     Args:
+        request: Request object
         username: The username of the chat.
 
     Returns:
@@ -275,28 +276,28 @@ async def get_chat(username: str) -> JSONResponse:
     """
     try:
         resp = await client.get_chat(username)
-    except UsernameNotOccupied:
-        raise HTTPException(status_code=404, detail="This username does not exist")
-    except ChannelPrivate as e:
-        raise HTTPException(status_code=403, detail=str(e))
+    except (UsernameNotOccupied, ChannelPrivate,) as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if resp.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
         raise HTTPException(status_code=403, detail="This is not channel or group")
     return JSONResponse(
-        PyrogramResponse.build(resp)
+        PyrogramResponse(request.url.hostname).build(resp)
     )
 
 
 @app.get("/messages/{username}")
 async def get_messages(
+        request: Request,
         username: str,
         offset: int = 0,
         offset_id: int = 0,
-        offset_date: datetime = utils.zero_datetime()
+        offset_date: datetime = utils.zero_datetime(),
 ) -> JSONResponse:
     """
     Retrieves messages from a Telegram channel.
 
     Args:
+        request: Request object
         username: The username of the channel.
         offset: The offset from which to start retrieving messages (default: 0).
         offset_id: The ID of the message from which to start retrieving messages (default: 0).
@@ -308,22 +309,25 @@ async def get_messages(
     Raises:
         HTTPException: If the channel does not exist or is not a channel.
     """
-    messages = []
+    resp = client.get_chat_history(
+        username,
+        limit=20,
+        offset=offset,
+        offset_id=offset_id,
+        offset_date=offset_date)
+
     try:
-        resp = client.get_chat_history(
-            username, limit=20, offset=offset, offset_id=offset_id, offset_date=offset_date)
-    except UsernameNotOccupied:
-        raise HTTPException(status_code=404, detail="This username does not exist")
-    except ChannelPrivate as e:
-        raise HTTPException(status_code=403, detail=str(e))
-    async for i, message in a.enumerate(resp):
-        if not i and message.chat.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
-            raise HTTPException(status_code=403, detail="This is not channel or group")
-        del message.chat
-        messages.append(
-            PyrogramResponse.build(message)
-        )
-    return JSONResponse(messages)
+        messages = []
+        async for i, message in a.enumerate(resp):
+            if not i and message.chat.type not in (ChatType.CHANNEL, ChatType.GROUP, ChatType.SUPERGROUP,):
+                raise HTTPException(status_code=403, detail="This is not channel or group")
+            del message.chat
+            messages.append(
+                PyrogramResponse(request.url.hostname).build(message)
+            )
+        return JSONResponse(messages)
+    except (UsernameNotOccupied, ChannelPrivate,) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get(
