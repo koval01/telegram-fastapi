@@ -81,7 +81,9 @@ class Cryptography:
         Returns:
             The encrypted string.
         """
-        return self.fernet.encrypt(_input.encode()).decode().replace("=", "")
+        return self.fernet.encrypt_at_time(
+            _input.encode(), int(time())
+        ).decode().replace("=", "")
 
     def encrypt_json(self, _input: dict) -> str:
         """
@@ -95,7 +97,6 @@ class Cryptography:
         Returns:
             The encrypted string.
         """
-        _input = {**_input, "timestamp": int(time() + 3600)}
         return self.encrypt(json.dumps(_input))
 
     def decrypt(self, _input: str) -> str:
@@ -108,7 +109,10 @@ class Cryptography:
         Returns:
             The decrypted string.
         """
-        return self.fernet.decrypt(_input.encode() + b'=' * (-len(_input) % 4)).decode()
+        return self.fernet.decrypt(
+            _input.encode() + b'=' * (-len(_input) % 4),
+            ttl=3600
+        ).decode()
 
     def decrypt_json(self, _input: str) -> dict:
         """
@@ -140,10 +144,10 @@ class PyrogramResponse:
         Returns:
             The file URL.
         """
-        data = Cryptography().encrypt_json({
-            "file_id": file_id,
-            "mime_type": mime_type
-        })
+        data = {"file_id": file_id}
+        if mime_type:
+            data["mime_type"] = mime_type
+        data = Cryptography().encrypt_json(data)
         return f"{os.getenv('APP_DOMAIN')}/media/{data}"
 
     @classmethod
@@ -211,7 +215,7 @@ class PyrogramResponse:
                 if not attr.startswith("_"):
                     attr_value = getattr(obj, attr)
                     if isinstance(attr_value, Enum):
-                        setattr(obj, attr, attr_value.name.lower())
+                        setattr(obj, attr, attr_value.name.title())
                     else:
                         setattr(obj, attr, cls.replace_enum_types_with_names(attr_value))
             return obj
@@ -338,8 +342,6 @@ async def get_media(media: str) -> Response:
     try:
         data = Cryptography().decrypt_json(media)
     except InvalidToken:
-        raise HTTPException(status_code=400, detail="Invalid media token")
-    if data["timestamp"] < int(time()):
         raise HTTPException(status_code=400, detail="Invalid media token")
 
     file = await client.download_media(data["file_id"], in_memory=True)
