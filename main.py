@@ -31,30 +31,27 @@ from pyrogram.errors.exceptions import UsernameNotOccupied, ChannelPrivate
 from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
 
-from dotenv import load_dotenv
+from core.config import settings
 
 import jsonpickle
 
 logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv(".env.local")
-
 # Initialize the Telegram client
 client = Client(
     "account",
-    os.getenv("API_ID"),
-    os.getenv("API_HASH"),
+    settings.API_ID,
+    settings.API_HASH,
     in_memory=True,
-    session_string=os.getenv("SESSION"),
+    session_string=settings.SESSION,
     device_model=os.uname()[1]
 )
 
 # Initialize the FastAPI app
 app = FastAPI(debug=False)
 app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=os.getenv("ALLOWED_HOSTS").split(",")
+    TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS.split(",")
 )
 main_app_lifespan = app.router.lifespan_context
 
@@ -62,7 +59,7 @@ main_app_lifespan = app.router.lifespan_context
 @asynccontextmanager
 async def lifespan_wrapper(_: FastAPI):
     await client.start()
-    redis_connection = redis.from_url(os.getenv("REDIS_URI"), encoding="utf-8", decode_responses=True)
+    redis_connection = redis.from_url(settings.REDIS_URI, encoding="utf-8", decode_responses=True)
     await FastAPILimiter.init(redis_connection)
     async with main_app_lifespan(app) as maybe_state:
         yield maybe_state
@@ -82,7 +79,7 @@ class Cryptography:
 
         Loads the encryption key from the environment variable `CRYPT_KEY`.
         """
-        key: bytes = os.getenv("CRYPT_KEY").encode()
+        key: bytes = settings.CRYPT_KEY.encode()
         self.fernet = Fernet(key)
 
     def encrypt(self, _input: str) -> str:
