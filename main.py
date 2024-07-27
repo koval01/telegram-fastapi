@@ -13,11 +13,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Union
 
+import redis.asyncio as redis
 import asyncstdlib as a
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse, Response
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 
 from pyrogram import Client, utils
 from pyrogram.enums import ChatType
@@ -58,6 +62,8 @@ main_app_lifespan = app.router.lifespan_context
 @asynccontextmanager
 async def lifespan_wrapper(_: FastAPI):
     await client.start()
+    redis_connection = redis.from_url(os.getenv("REDIS_URI"), encoding="utf-8", decode_responses=True)
+    await FastAPILimiter.init(redis_connection)
     async with main_app_lifespan(app) as maybe_state:
         yield maybe_state
     await client.stop()
@@ -259,7 +265,7 @@ def read_root() -> RedirectResponse:
     return RedirectResponse("/docs")
 
 
-@app.get("/chat/{username}")
+@app.get("/chat/{username}", dependencies=[Depends(RateLimiter(times=5, seconds=15))])
 async def get_chat(request: Request, username: str) -> JSONResponse:
     """
     Retrieves information about a Telegram chat.
@@ -285,7 +291,7 @@ async def get_chat(request: Request, username: str) -> JSONResponse:
     )
 
 
-@app.get("/messages/{username}")
+@app.get("/messages/{username}", dependencies=[Depends(RateLimiter(times=3, seconds=15))])
 async def get_messages(
         request: Request,
         username: str,
@@ -337,7 +343,8 @@ async def get_messages(
             "content": {"image/png": {}}
         }
     },
-    response_class=Response
+    response_class=Response,
+    dependencies=[Depends(RateLimiter(times=1, seconds=5))]
 )
 async def get_media(media: str) -> Response:
     """
@@ -379,5 +386,4 @@ async def get_health() -> Response:
     Raises:
         HTTPException: If the API is not healthy.
     """
-    await client.get_me()
     return Response(None, status_code=200)
